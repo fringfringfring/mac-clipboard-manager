@@ -143,7 +143,7 @@ To have the clipboard manager start automatically when you log in, you can use a
 ## File Structure
 
 ```
-ClipboardManager/
+mac-clipboard-manager/
 ├── clipboard_manager.py      # Main script
 ├── requirements.txt          # Python dependencies
 ├── history.dat               # Auto-generated: persisted clipboard history (gitignored)
