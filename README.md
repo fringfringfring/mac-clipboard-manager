@@ -132,7 +132,7 @@ To have the clipboard manager start automatically when you log in, you can use a
 
 2. **Snapshot storage** — each snapshot stores the raw `NSData` for every pasteboard type (text, image, URL, etc.), preserving full fidelity. Up to 3 snapshots are kept in memory.
 
-3. **Persistence** — snapshots are serialized to `~/Documents/ClipboardManager/history.dat` using `pickle` after every new copy event. On startup, the file is loaded back so history survives restarts.
+3. **Persistence** — snapshots are serialized with `pickle`, HMAC-SHA256 signed, and written atomically to `~/Library/Application Support/MacClipboardManager/history.dat`. On startup, the HMAC is verified before unpickling; a tampered or corrupted file is discarded and history starts fresh.
 
 4. **Hotkey listener** — `pynput` listens globally for `Ctrl + Shift + V`. When triggered, a Tkinter virtual event (`<<ShowMenu>>`) is posted to the main thread, which opens a native `tk.Menu` popup at the current cursor position.
 
@@ -143,14 +143,17 @@ To have the clipboard manager start automatically when you log in, you can use a
 ## File Structure
 
 ```
-mac-clipboard-manager/
-├── clipboard_manager.py      # Main script
-├── requirements.txt          # Python dependencies
-├── history.dat               # Auto-generated: persisted clipboard history (gitignored)
-├── clipboard_manager.log     # Auto-generated: application log (gitignored)
-├── out.log                   # Auto-generated: stdout log when run via launchd (gitignored)
-├── err.log                   # Auto-generated: stderr log when run via launchd (gitignored)
+mac-clipboard-manager/              # Repository (source code only)
+├── clipboard_manager.py            # Main script
+├── requirements.txt                # Python dependencies
+├── clipboard_manager.log           # Auto-generated: application log (gitignored)
+├── out.log                         # Auto-generated: stdout (launchd only, gitignored)
+├── err.log                         # Auto-generated: stderr (launchd only, gitignored)
 └── README.md
+
+~/Library/Application Support/MacClipboardManager/   # Runtime data (outside repo)
+├── history.dat                     # Auto-generated: HMAC-signed clipboard history
+└── key.bin                         # Auto-generated: HMAC secret key (permissions: 0600)
 ```
 
 ---
@@ -159,7 +162,7 @@ mac-clipboard-manager/
 
 - **All data stays local.** This script has no network access. Your clipboard history never leaves your machine.
 - **`history.dat` contains your clipboard data** in binary format. Treat it like any sensitive file — do not share it or commit it to version control. It is listed in `.gitignore` for this reason.
-- **`pickle` is used for persistence.** Python's `pickle` format is not encrypted or signed. If someone with local access to your machine were to tamper with `history.dat`, it could execute arbitrary code the next time the script loads it. For a personal, single-user tool this risk is low, but you should be aware of it. If you want stronger guarantees, do not use this script on a shared machine.
+- **History is stored locally and integrity-checked (HMAC-SHA256).** If the file is corrupted or tampered with, the app discards it and starts fresh. Data is not encrypted — the protection is against tampering, not confidentiality.
 - **Accessibility permission** is required by `pynput` to listen for global key events. This is a standard macOS mechanism — the script only acts on the specific `Ctrl + Shift + V` combination and does not record or transmit keystrokes.
 
 ---

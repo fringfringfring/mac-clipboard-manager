@@ -3,19 +3,31 @@ import threading
 import tkinter as tk
 import os
 import pickle
+import hmac
+import hashlib
+import secrets
 import subprocess
 import datetime
 import logging
+from pathlib import Path
 from pynput import keyboard
 from AppKit import NSPasteboard, NSPasteboardTypeString, NSPasteboardTypePNG, \
                    NSPasteboardTypeTIFF, NSPasteboardTypeURL, NSPasteboardTypeFileURL
 from Foundation import NSData, NSString, NSUTF8StringEncoding
 
-# File path for persistence
+# File paths
 BASE_DIR = os.path.expanduser("~/Documents/ClipboardManager")
-HISTORY_FILE = os.path.join(BASE_DIR, "history.dat")
 LOG_FILE = os.path.join(BASE_DIR, "clipboard_manager.log")
+APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "MacClipboardManager"
+HISTORY_FILE = APP_SUPPORT_DIR / "history.dat"
+KEY_FILE = APP_SUPPORT_DIR / "key.bin"
 START_TIME = datetime.datetime.now().strftime("%I:%M %p")
+
+# History file format
+MAGIC = b"MCBM"               # 4-byte identifier
+VERSION = 1                   # 1-byte format version
+MAC_LEN = 32                  # SHA-256 digest size
+HEADER_LEN = 4 + 1 + MAC_LEN  # magic + version + hmac
 
 # Logging: writes to both terminal and a persistent log file
 logging.basicConfig(
@@ -34,36 +46,79 @@ is_internal_update = False
 current_keys = set()
 _lock = threading.Lock()
 
-def save_history():
-    """Saves the current history to disk."""
+def _load_or_create_key() -> bytes:
+    """Returns the HMAC key, generating and storing it on first run."""
+    APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
+    if KEY_FILE.exists():
+        return KEY_FILE.read_bytes()
+    key = secrets.token_bytes(32)
+    fd = os.open(str(KEY_FILE), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        # We convert NSData to raw bytes so they can be 'pickled' (saved to disk)
+        os.write(fd, key)
+    finally:
+        os.close(fd)
+    logging.info("Generated new HMAC key.")
+    return key
+
+def save_history():
+    """Saves the current history to disk, HMAC-signed and written atomically."""
+    try:
+        # Convert NSData to raw bytes so they can be pickled
         serializable_history = []
         for item in clipboard_history:
             serializable_snap = {}
             for t, nsdata in item["data"].items():
                 serializable_snap[t] = bytes(nsdata)
             serializable_history.append({"data": serializable_snap, "time": item["time"]})
-        
-        with open(HISTORY_FILE, "wb") as f:
-            pickle.dump(serializable_history, f)
+
+        key = _load_or_create_key()
+        payload = pickle.dumps(serializable_history, protocol=pickle.HIGHEST_PROTOCOL)
+        mac = hmac.new(key, payload, hashlib.sha256).digest()
+
+        tmp = HISTORY_FILE.with_suffix(".tmp")
+        with open(tmp, "wb") as f:
+            f.write(MAGIC + bytes([VERSION]) + mac + payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, HISTORY_FILE)
     except Exception as e:
         logging.error(f"Save error: {e}", exc_info=True)
 
 def load_history():
-    """Loads history from disk on startup."""
+    """Loads history from disk, verifying HMAC before unpickling."""
     global clipboard_history
-    if os.path.exists(HISTORY_FILE):
+    if not HISTORY_FILE.exists():
+        return
+    try:
+        key = _load_or_create_key()
+        blob = HISTORY_FILE.read_bytes()
+
+        if len(blob) < HEADER_LEN or blob[:4] != MAGIC:
+            raise ValueError("Invalid history file format")
+
+        ver = blob[4]
+        if ver != VERSION:
+            raise ValueError(f"Unsupported history file version: {ver}")
+
+        stored_mac = blob[5:5 + MAC_LEN]
+        payload = blob[5 + MAC_LEN:]
+
+        expected_mac = hmac.new(key, payload, hashlib.sha256).digest()
+        if not hmac.compare_digest(stored_mac, expected_mac):
+            raise ValueError("HMAC verification failed — history may have been tampered with")
+
+        loaded = pickle.loads(payload)
+        for item in loaded:
+            nsdata_snap = {}
+            for t, b_data in item["data"].items():
+                nsdata_snap[t] = NSData.dataWithBytes_length_(b_data, len(b_data))
+            clipboard_history.append({"data": nsdata_snap, "time": item["time"]})
+    except Exception as e:
+        logging.error(f"Load error: {e}", exc_info=True)
         try:
-            with open(HISTORY_FILE, "rb") as f:
-                loaded = pickle.load(f)
-                for item in loaded:
-                    nsdata_snap = {}
-                    for t, b_data in item["data"].items():
-                        nsdata_snap[t] = NSData.dataWithBytes_length_(b_data, len(b_data))
-                    clipboard_history.append({"data": nsdata_snap, "time": item["time"]})
-        except Exception as e:
-            logging.error(f"Load error: {e}", exc_info=True)
+            HISTORY_FILE.unlink()
+        except OSError:
+            pass
 
 def get_clipboard_snapshot():
     pb = NSPasteboard.generalPasteboard()
