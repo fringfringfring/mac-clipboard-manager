@@ -27,7 +27,7 @@ A lightweight, persistent clipboard manager for macOS written in Python. It sile
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/<your-username>/ClipboardManager.git
+   git clone https://github.com/fringfringfring/ClipboardManager.git
    cd ClipboardManager
    ```
 
