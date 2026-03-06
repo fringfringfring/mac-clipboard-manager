@@ -1,3 +1,2 @@
-pyperclip
 pynput
 pyobjc-framework-Cocoa
