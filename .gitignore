@@ -1,0 +1,4 @@
+history.dat
+*.log
+__pycache__/
+.DS_Store
