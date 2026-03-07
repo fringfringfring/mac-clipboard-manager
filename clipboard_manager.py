@@ -29,6 +29,8 @@ VERSION = 1                   # 1-byte format version
 MAC_LEN = 32                  # SHA-256 digest size
 HEADER_LEN = 4 + 1 + MAC_LEN  # magic + version + hmac
 
+os.makedirs(BASE_DIR, exist_ok=True)  # Ensure log directory exists before FileHandler init
+
 # Logging: writes to both terminal and a persistent log file
 logging.basicConfig(
     level=logging.INFO,
@@ -116,7 +118,10 @@ def load_history():
     except Exception as e:
         logging.error(f"Load error: {e}", exc_info=True)
         try:
-            HISTORY_FILE.unlink()
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            quarantine = HISTORY_FILE.with_name(f"history.{ts}.corrupt")
+            HISTORY_FILE.rename(quarantine)
+            logging.warning(f"Corrupt/tampered history quarantined to {quarantine}")
         except OSError:
             pass
 
